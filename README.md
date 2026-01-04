@@ -2,7 +2,7 @@
 On-Demand Sync Clock (OSC), a DIY smart table clock that calibrates itself with one touch of a button.
 
 <br><br>
-![title image](/images/slc_picture_small.jpg)![title image](/images/osc_picture_small.jpg)
+![title image](/images/osc_picture_small.jpg)![title image](/images/osc_picture2_small.jpg)
 
 
 The distinctive feature of this clock is its effortless adjustment: Simply press the push-button while an open network (Wi-Fi without password) is available, for instance, a smartphone hotspot.
