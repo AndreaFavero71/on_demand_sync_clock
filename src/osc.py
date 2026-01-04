@@ -16,7 +16,7 @@ The clock is based on
 
 More info at:
   https://github.com/AndreaFavero71/on_demand_sync_clock
-  https://www.instructables.com/On-Demand-sync-Clock/
+  https://www.instructables.com/On-demand-Sync-Clock-OSC/
 
 
 
