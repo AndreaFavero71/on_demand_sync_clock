@@ -39,12 +39,8 @@ from lib.lib_display import helvetica110b_digits, helvetica28b_subset
 from lib.lib_display.epd4in2_V2 import EPD
 from lib.lib_display.writer import Writer
 
-
 EPD_WIDTH = 400
 EPD_HEIGHT = 300
-
-
-BATTERY_CHECK_INTERVAL_S = 1        # period (in secs) in between battery level check
 
 # settings for battery voltage check
 ADC_IN = Pin(4)                     # GPIO1 reads battery voltage
@@ -53,10 +49,14 @@ adc_bat.atten(ADC.ATTN_11DB)        # 11dB attenuation (input range up to ~3.3V)
 V_REF = 3.3                         # ADC reference voltage (assuming ESP32 powered at 3.3V)
 DIVIDER_RATIO = 2                   # voltage divider ratio:  (R2 + R41) / R41 = (100 + 100) / 100
 VBAT_READINGS = 20                  # number of readings for averaging
-CORRECTION = 1.0004 # default 1.0   # correction of adc reading slope vs measured (multimeter)
-SHIFT = 0.23        # default 0.0   # correction of adc reading shift vs measured (multimeter)    
-HYSTERESIS_V = 0.03                 # 30 mV hysteresys from battery_level change
+BATTERY_CHECK_INTERVAL_S = 1        # period (in secs) in between battery level check
 
+# constants for the ADC calibration
+CORRECTION = 1.0    # default 1.0   # correction of adc reading slope vs measured (multimeter)
+SHIFT = 0.0         # default 0.0   # correction of adc reading shift vs measured (multimeter)    
+
+# Constant to prevent battery level jumping up and down between levels
+HYSTERESIS_V = 0.03                 # 30 mV hysteresys from battery_level change
 
 # battery voltage initial variabile
 battery_voltage_list = []           # initialize list holdist the last voltage measurements
@@ -195,7 +195,7 @@ def print_info():
     print("#  Connect an adjustable power supply voltage to the wiring, normally used by the     #")
     print("#  battery to energize the T8 board.                                                  #")
     print("#                                                                                     #")
-    print("#  Vary the power supply voltage from ca 3.0 Volts to max 4.2 Volts.                  #")
+    print("#  Vary the power supply voltage from ca 3.2 Volts to max 4.2 Volts.                  #")
     print("#  After every variation, wait until the value on the screen gets stable (averaging)  #")
     print("#  Make a table with the supply voltage, and the voltage measured by the ESP32.       #")
     print("#                                                                                     #")

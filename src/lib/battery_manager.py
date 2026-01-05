@@ -31,18 +31,21 @@ SOFTWARE.
 from machine import Pin, ADC
 from utime import sleep_ms
 
-
 ADC_IN = Pin(4)                     # GPIO reading battery voltage
 V_REF = 3.3                         # ADC reference voltage (assuming ESP32 powered at 3.3V)
 DIVIDER_RATIO = 2                   # voltage divider ratio:  (R2 + R41) / R41 = (100 + 100) / 100
 VBAT_READINGS = 20                  # number of readings for averaging
-CORRECTION = 1.0004  #(default 1.0) # correction of adc reading slope vs measured (multimeter)
-SHIFT = 0.23         #(default 0.0) # correction of adc reading shift vs measured (multimeter)         
-HYSTERESIS_V = 0.03                 # 30 mV hysteresys for battery_level change (prevent jumping up and down)
+
+# constants for the ADC calibration
+CORRECTION = 1.0     #(default 1.0) # correction of adc reading slope vs measured (multimeter)
+SHIFT = 0.0          #(default 0.0) # correction of adc reading shift vs measured (multimeter)         
 
 # tuples with the volatge thresholds and battery levels
 VOLTAGE_LEVELS = (4.02, 3.95, 3.84, 3.725, 3.675, 3.64, 3.59)
 PERCENT_LEVELS = (100, 80, 60, 40, 20, 10, 0)
+
+# Constant to prevent battery level jumping up and down between levels
+HYSTERESIS_V = 0.03                 # 30 mV hysteresys for battery_level change (prevent jumping up and down)
 
 
 class Battery():
