@@ -1,5 +1,5 @@
 """
-Andrea Favero 20260103
+Andrea Favero 20260106
 
 On-demand Sync Clock (OSC)
 A digital clock with on-request NTP syncing, via the push of a button.
@@ -43,7 +43,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 # import standard modules
 from utime import ticks_ms, sleep_ms, ticks_diff, mktime
@@ -295,14 +295,19 @@ class SelfLearningClock:
         
         # case lightsleep is set True
         elif config.LIGHTSLEEP_USAGE:
-            
-            # disables the wifi, otherwise the light sleep does not start
-            if self.network_mgr.wlan.active() or self.network_mgr.wlan.isconnected():
-                wlan_disabling_t_ms = self.network_mgr.disable_wifi()
-                if total_sleep_ms > wlan_disabling_t_ms:
-                    total_sleep_ms -= wlan_disabling_t_ms
-                else:
-                    total_sleep_ms = 0
+
+            try:
+                # disables the wifi, otherwise the light sleep does not start
+                if self.network_mgr.wlan is not None and (self.network_mgr.wlan.active() or self.network_mgr.wlan.isconnected()):
+                    wlan_disabling_t_ms = self.network_mgr.disable_wifi()
+                    if total_sleep_ms > wlan_disabling_t_ms:
+                        total_sleep_ms -= wlan_disabling_t_ms
+                    else:
+                        total_sleep_ms = 0
+            except Exception as e:
+                if config.DEBUG:
+                    print(f"[ERROR]   Issue at goto_sleep when config.LIGHTSLEEP_USAGE: {e}")
+                
             
             # refresh the wdt
             self.network_mgr.feed_wdt(label="goto_sleep_2")
@@ -1195,3 +1200,4 @@ async def main(logo_time_ms=0):
 if __name__ == "__main__":
     print(f"\nOSC version = {__version__}")
     asyncio.run(main(logo_time_ms=5_000))
+

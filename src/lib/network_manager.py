@@ -524,7 +524,7 @@ class NetworkManager:
                 self.wlan.active(True)
         
         # case internet is not available
-        if not await self.is_internet_available(blocking=blocking):
+        if self.wlan is not None and not await self.is_internet_available(blocking=blocking):
             
             # feedback is printed to the terminal
             if config.DEBUG:

@@ -7,14 +7,14 @@
 ##################################################################
 
 # from utime import sleep_ms
-# t_ms = 30000
-# print(f"\n\n{t_ms//1500} seconds sleep time to delay the WDT")
+# 
+# print(f"\n\n15 seconds sleep time to delay the WDT")
 # print("This time should suffice to interrupt the code via CTRL + C (preventing automatic script execution)\n")
-# sleep_ms(t_ms//1.5)
+# sleep_ms(10_000)
 # 
 # import asyncio
 # import osc
-# asyncio.run(osc.main(logo_time_ms=int(t_ms//2)))
+# asyncio.run(osc.main(logo_time_ms=10_000))
 
 
 
