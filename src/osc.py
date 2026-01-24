@@ -1,22 +1,22 @@
 """
-Andrea Favero 20260106
+Andrea Favero 20260124
 
-On-demand Sync Clock (OSC)
-A digital clock with on-request NTP syncing, via the push of a button.
+On-demand Sync Clock (OSC), a smart digital clock
 
-The NTP sync is used to adjust the RTC of DS3231SN; If enough time has passed from
-boot, or from the previous sync, the DS3231SN aging factor gets automatically calibrated.
-
+The main distinctive feature is its easy sync and calibration, via
+the push button and Wi-Fi coverage (also open Wi-Fi), resulting in:
+- DS3231SN sync, if less than 14 days from previous sync.
+- DS3231SN calibration, if more than 14 days from previous sync.
 
 
 The clock is based on
 - LiLyGO TTGO T8-S3 board (v1.2)      [https://tinyurl.com/3tyy9sea]
 - DS3231SN module                     [https://tinyurl.com/3vp7n53h]
-- WaveShare 4.2 inches epaper display [https://www.waveshare.com/wiki/Pico-ePaper-4.2]
+- WaveShare 4.2" epaper Pico display  [https://www.waveshare.com/wiki/Pico-ePaper-4.2]
 
 More info at:
   https://github.com/AndreaFavero71/on_demand_sync_clock
-  https://www.instructables.com/On-demand-Sync-Clock-OSC/
+  https://www.instructables.com/On-Demand-sync-Clock-OSC/
 
 
 
@@ -43,7 +43,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 # import standard modules
 from utime import ticks_ms, sleep_ms, ticks_diff, mktime
@@ -194,7 +194,7 @@ class SelfLearningClock:
             nvs.get_blob(str(key), buffer)
             value = buffer.decode().strip('\x00') 
             if config.DEBUG:
-                print(f"[DEBUG]    An aging_factor was available: {value}")
+                print(f"[DEBUG]    Aging factor at esp32.nvs is {value}")
             return int(self._convert_to_number(value))
         
         except Exception as e:
@@ -274,7 +274,9 @@ class SelfLearningClock:
             # The sleep is done in chunk, to check the NTP button as per lighsleep
  
             if config.DEBUG:
-                print(f"[DEBUG]    MCU awake for {ticks_diff(ticks_ms(), self.t_out_sleep)} ms")
+                awake_time_ms = ticks_diff(ticks_ms(), self.t_out_sleep)
+                if awake_time_ms < 1.5 * config.DISPLAY_REFRESH_MS:
+                    print(f"[DEBUG]    MCU awake for {awake_time_ms} ms")
                 print(f"[DEBUG]    Going to sleep for {total_sleep_ms} ms")
 
             sleep_chunk_ms = 10
@@ -665,11 +667,14 @@ class SelfLearningClock:
         # aging is initially set to None
         aging = None
         
+        # set the reset_aging to False
+        reset_aging = False
+        
         # set the done variable to False, used later to break to for loops
         done = False
         
-        # set the reset_aging to False
-        reset_aging = False
+        # set the ret variable to False
+        ret = False
         
         # get the TZ and DST correction to NVS
         utc_tz_dst = self.get_tz_dst_nvs(text = "CALIB")
@@ -708,8 +713,11 @@ class SelfLearningClock:
                 new_aging = int(round(min(127, max(-127, self.aging + 0.9 * drift_ds3231_ppm)),0))
                 
                 if config.DEBUG:
-                    print(f"[CALIB]    New aging factor: {new_aging}")
-                
+                    if new_aging == self.aging:
+                        print(f"[CALIB]    Existing aging factor {new_aging} is maintained")
+                    elif new_aging != self.aging:
+                        print(f"[CALIB]    New aging factor: {new_aging}")
+                                    
                 # set 3 attempts for aging factor calibration
                 attempts = 3
             
@@ -718,9 +726,9 @@ class SelfLearningClock:
                 # set one attempt for aging factor reset
                 attempts = 1
             
-             
-            # iteration over the attempts
-            for attempt in range(attempts):
+            
+            # the for loop is used to check whether the intention is to reset the aging factor to zero
+            for attempt in range(attempts):  # iteration over the attempts
                 
                 # variable 'done' is used to break the for loop in case of success before all attempts
                 if done:
@@ -755,7 +763,7 @@ class SelfLearningClock:
                         print("[CALIB]    Going to reset the aging factor")
                 
                 # case the button has been released
-                elif not self.ntp_sync_pin.value():
+                elif not self.ntp_sync_pin.value() and new_aging != self.aging:
                     # set the ret variable False, in case write_DS3231_aging is not executed 
                     ret = False
                     
@@ -807,8 +815,8 @@ class SelfLearningClock:
                         # the just saved aging value at the DS3131 is assigned to the variable aging
                         aging = aging_ds3231
                     
-                        if config.DEBUG:
-                            print("[CALIB]    New aging factor has been written to the DS3231 chip")
+                        if config.DEBUG and aging_ds3231 != self.aging:
+                            print(f"[CALIB]    New aging factor {aging_ds3231} has been written to the DS3231 chip")
                         
                         # plot the OSC logo with a custom text underneath
                         self.display.text_on_logo(" CALIBRATED  CLOCK", x=-1, y=-1, show_time_ms=5_000)
@@ -822,7 +830,22 @@ class SelfLearningClock:
                 # case the variabe done isi set True
                 if done:
                     break  # for loop is interrupted
+
+        # load aging factor from NVS
+        aging_factor_nvs = self.get_aging_nvs()
         
+        # case the aging factor at the NVS differs from the one at DS3231SN
+        if aging_factor_nvs != aging:
+            
+            # write the DS3231 aging factor to the ESP32 NVS
+            ret = self.save_aging_nvs(int(aging), key=1)
+            
+            # case writeing went well
+            if ret and config.DEBUG and aging_ds3231 != self.aging:
+                # check the aging factor at ESP32 NVS
+                if self.get_aging_nvs():
+                    print(f"[CALIB]    New aging factor {aging} has been correctly written to the ESP32 NVS")
+            
         if config.DEBUG:
             print()
         
@@ -1096,7 +1119,8 @@ class SelfLearningClock:
         the aging factor at DS3231SN is not retained in case of power loss (battery died).
         """
         
-        aging = None
+        if config.DEBUG:
+            print()
         
         # read aging factor from DS3232SN
         aging_factor_ds3231sn = await self.time_mgr.read_DS3231_aging()
@@ -1122,23 +1146,27 @@ class SelfLearningClock:
                 ret = await self.time_mgr.write_DS3231_aging(value = aging_factor_nvs)
                 if config.DEBUG:
                     if ret:
-                        print(f"[DEBUG]    Aging factor at ESP32 NVS {aging_factor_ds3231sn} is now written at DS3231SN flash memory") 
+                        print(f"[DEBUG]    Aging factor {aging_factor_ds3231sn} at ESP32 NVS is now written at DS3231SN flash memory") 
                     else:
                         print(f"[DEBUG]    Error in writing the aging factor {aging_factor_ds3231sn} to DS3231SN flash memory")
         
-        # case aging_factor_ds3231sn differs from zero and aging_factor_nvs in None
+        # case aging_factor_ds3231sn differs from zero and aging_factor_nvs in None or == zero
         # this is the case when the aging_factor_ds3231sn is manually written in development phase
         # this IF case must remain at the end of the other IF cases
-        if aging_factor_ds3231sn is not None and aging_factor_nvs is None:
+        if aging_factor_ds3231sn is not None and (aging_factor_nvs is None or aging_factor_nvs==0):
             ret = self.save_aging_nvs(aging_factor_ds3231sn)
             if config.DEBUG:
                 if ret:
-                    print(f"[DEBUG]    Aging factor at DS3231SN flash memory ({aging_factor_ds3231sn}) is now written to ESP32 NVS") 
+                    print(f"[DEBUG]    Aging factor {aging_factor_ds3231sn} at DS3231SN flash memory is now written to ESP32 NVS") 
                 else:
                     print(f"[DEBUG]    Error in writing the aging factor {aging_factor_ds3231sn} to ESP32 NVS")
         
         # load aging factor from NVS, eventually updated
         aging_factor_nvs = self.get_aging_nvs()
+        
+        if config.DEBUG:
+            print()
+        
         return aging_factor_nvs
     
     
@@ -1200,4 +1228,3 @@ async def main(logo_time_ms=0):
 if __name__ == "__main__":
     print(f"\nOSC version = {__version__}")
     asyncio.run(main(logo_time_ms=5_000))
-

@@ -1,10 +1,13 @@
 
 """
-Andrea Favero 20260103
+Andrea Favero 20260124
 
-On-demand Sync Clock (OSC)
-A digital clock with on-request NTP syncing, via a push button.
-The clock is based on a LiLyGO TTGO T8-S3 board and DS3231SN module
+On-demand Sync Clock (OSC), a smart digital clock
+
+The main distinctive feature is its easy sync and calibration, via
+the push button and Wi-Fi coverage (also open Wi-Fi), resulting in:
+- DS3231SN sync, if less than 14 days from previous sync.
+- DS3231SN calibration, if more than 14 days from previous sync.
 
 
 Utility function to set a new aging factor to the DS3231 chip.
@@ -14,11 +17,14 @@ Every unit affects about 1 ppm.
 
  - Negative sign indicates the clock runs slow (needs speeding up)
  + Positive sign means the clock runs runs fast (needs slowing down)
+ 
+ More info at:
+ https://www.analog.com/media/en/technical-documentation/data-sheets/ds3231.pdf
 
 """
 
-SDA_PIN = 1
-SCL_PIN = 2
+SDA_PIN = 2
+SCL_PIN = 1
 DS3231_PWR_PIN = 3
 
 
@@ -59,17 +65,17 @@ current_aging_factor = ds.read_aging()
 sleep_ms(250)
 
 if current_aging_factor is not None:
-    full_line = "#" * 77
-    separation_line = f"#{" " * 75}#"
+    full_line = "#" * 76
+    separation_line = f"#{" " * 74}#"
 
     print()
     print(full_line)
     print(separation_line)
-    print("#  Utility to apply an aging factor, to speed up or slow down the DS3231SN  #")
-    print("#  The allowed range is from -127 to 127; Every unit corrects about 1 ppm   #")
+    print("#  Utility to manually enter an aging factor to the DS3231SN chip          #")
+    print("#  The allowed range is from -127 to 127; Every unit corrects about 1 ppm  #")
     print(separation_line)
-    print("#  - Negative sign indicates the clock runs slow (needs speeding up)        #")
-    print("#  + Positive sign means the clock runs runs fast (needs slowing down)      #")
+    print("#  - Negative sign indicates the clock runs slow (needs speeding up)       #")
+    print("#  + Positive sign means the clock runs runs fast (needs slowing down)     #")
     print(separation_line)
     print(full_line)
 
@@ -85,7 +91,7 @@ if current_aging_factor is not None:
         if aging_factor is None:
             print("\nInvalid entry (non-numeric). The aging factor will remain unchanged.")
         else:
-            print(f"\nThe entered aging factor of {aging_factor} is getting written to the DS3231 chip")
+            print(f"\nThe entered aging factor {aging_factor} is getting written to the DS3231 chip ...")
 
             # write the entered aging_factor to the DS3231 chip
             ds.write_aging(value = aging_factor)
