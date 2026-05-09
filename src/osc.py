@@ -1,5 +1,5 @@
 """
-Andrea Favero 20260124
+Andrea Favero 20260505
 
 On-demand Sync Clock (OSC), a smart digital clock
 
@@ -14,10 +14,18 @@ The clock is based on
 - DS3231SN module                     [https://tinyurl.com/3vp7n53h]
 - WaveShare 4.2" epaper Pico display  [https://www.waveshare.com/wiki/Pico-ePaper-4.2]
 
+High level info:
+- UTC is retrieved from NTP the first time the clock runs, and on request via the push button.
+- UTC is stored at the RTC DS3231.
+- TZ and DST are dinamically applied on the retrieved time from the RTC DS3132, for display purpose.
+- When saving UTC to theRTC, then TZ and DST are saved to NVS; This allows to precisely calculate the
+  aging factor also when a DST change has happened in the meanwhile.
+- No WiFi hospot is required when the clock boots after ESP32 shut-off due to low battery voltage.
+
+
 More info at:
   https://github.com/AndreaFavero71/on_demand_sync_clock
   https://www.instructables.com/On-Demand-sync-Clock-OSC/
-
 
 
 MIT License
@@ -43,7 +51,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-__version__ = "0.0.3"
+__version__ = "0.0.5"
 
 # import standard modules
 from utime import ticks_ms, sleep_ms, ticks_diff, mktime
@@ -115,6 +123,11 @@ class SelfLearningClock:
         # initialize the battery manager module, if set at config file
         if config.BATTERY:
             self.battery = Battery(debug=config.DEBUG)
+            self.batt_voltage = 0
+            self.batt_level = 0
+
+            # frequent battery check (6 minutes) when charging, otherwise less frequent (60 minutes)
+            self.battery_chrg = True
         
         # initialize WDT after all components are initialized
         self.wdt_manager.initialize() 
@@ -144,19 +157,26 @@ class SelfLearningClock:
     
     def get_reset_reason(self):
         """Checks the reason for the MCU boot"""
-        from machine import reset_cause, PWRON_RESET, HARD_RESET, WDT_RESET, DEEPSLEEP_RESET, SOFT_RESET
+        import machine
         
-        reset_reason, reset_message = None, None
-        reset_reason = reset_cause()
-        reset_message = {
-            PWRON_RESET: "POWER-ON RESET",
-            HARD_RESET: "HARD RESET",
-            WDT_RESET: "WATCHDOG RESET",
-            DEEPSLEEP_RESET: "DEEPSLEEP WAKE",
-            SOFT_RESET: "SOFT RESET"
-        }.get(reset_reason, f"???: {reset_reason}")
+        # getattr tries to get 'BROWN_OUT_RESET' from machine module. If not available, it return 6.
+        BROWN_OUT_RESET = getattr(machine, "BROWN_OUT_RESET", 6)
+
+        reset_reason = machine.reset_cause()
         
-        del reset_cause, PWRON_RESET, HARD_RESET, WDT_RESET, DEEPSLEEP_RESET, SOFT_RESET
+        reset_map = {
+            machine.PWRON_RESET:     "POWER-ON RESET",
+            machine.HARD_RESET:      "HARD RESET",
+            machine.WDT_RESET:       "WATCHDOG RESET",
+            machine.DEEPSLEEP_RESET: "DEEPSLEEP WAKE",
+            machine.SOFT_RESET:      "SOFT RESET",
+            BROWN_OUT_RESET:         "BROWNOUT RESET"
+            }
+        
+        reset_message = reset_map.get(reset_reason, f"???: {reset_reason}")
+        
+        del machine
+        
         return reset_reason, reset_message
     
     
@@ -186,75 +206,57 @@ class SelfLearningClock:
     
     
     
-    def get_aging_nvs(self, key=1):
-        """Read aging factor from NVS"""
+    def _get_nvs_val(self, key, default=None, text="DEBUG"):
+        """
+        Read data from esp.nvs.
+        Different keys are used: 'aging', 'tz_dst', 'battery_low'
+        """
+
         try:
-            nvs = NVS("storage")
-            buffer = bytearray(8)
-            nvs.get_blob(str(key), buffer)
-            value = buffer.decode().strip('\x00') 
+            nvs = NVS("app_data")
+            value = nvs.get_i32(key)   # get_i32 returns an integer
+            
             if config.DEBUG:
-                print(f"[DEBUG]    Aging factor at esp32.nvs is {value}")
-            return int(self._convert_to_number(value))
+                if key == "aging":
+                    print(f"[DEBUG]    Aging factor at esp32.nvs is {value}")
+                
+                elif key == "tz_dst":
+                    print(f"[{text}]    A tz_dst (Time Zone and DST correction) was available at esp32.nvs, value: {value}")
+                
+                elif key == "battery_low":
+                    state = True if value == 1 else False
+                    print(f"[DEBUG]    Low battery flag at esp32.nvs is {state}")
+            return value
         
-        except Exception as e:
-            if config.DEBUG:
-                if e.errno == -0x1102:
-                    print("[DEBUG]    Variable 'aging_factor' not found in esp32.NVS")
-                else:
-                    print(f"[ERROR]    Issue on reading from esp32.NVS: {e}")
-            return None
+        except OSError as e:
+            print(f"[ERROR] NVS Read {key}: {e}")
+            
+            if e.errno == -0x1102:
+                print(f"[DEBUG]    Variable '{key}' not found in esp32.NVS")
+            else:
+                print(f"[ERROR]    Issue on reading from esp32.NVS: {e}")
+            return default
     
     
     
     
-    def save_aging_nvs(self, aging_factor, key=1):
-        """Save aging factor to NVS"""
+    def _set_nvs_val(self, key, value):
+        """
+        Wite data to esp.nvs.
+        Different keys are used: 'aging', 'tz_dst', 'battery_low'
+        """
+
         try:
-            nvs = NVS("storage")
-            nvs.set_blob(str(key), str(aging_factor).encode())
+            nvs = NVS("app_data")
+            nvs.set_i32(key, int(value))
             nvs.commit()
+            state = True if value == 1 else False
+            print(f"[DEBUG]    Set {state} to the key '{key}' of esp32.NVS")
+            
             return True
         except Exception as e:
-            if config.DEBUG:
-                print(f"[ERROR]   Issue on saving to esp32.NVS: {e}")
-            raise
-    
-    
-    
-    
-    def get_tz_dst_nvs(self, text="DEBUG", key=2):
-        """Read tz_dst (Time Zone and DST correction) from NVS"""
-        try:
-            nvs = NVS("storage")
-            buffer = bytearray(8)
-            nvs.get_blob(str(key), buffer)
-            value = buffer.decode().strip('\x00') 
-            if config.DEBUG:
-                print(f"[{text}]    A tz_dst (Time Zone and DST correction) was available, value: {value}")
-            return self._convert_to_number(value)
-        
-        except Exception as e:
-            if config.DEBUG:
-                if e.errno == -0x1102:
-                    print("[DEBUG]    Variable 'tz_dst' not found in esp32.NVS")
-                else:
-                    print(f"[ERROR]    Issue on reading from esp32.NVS: {e}")
-            return None
-    
-    
-    
-    
-    def save_tz_dst_nvs(self, tz_dst, key=2):
-        """Save tz_dst (Time Zone and DST correction) to NVS"""
-        try:
-            nvs = NVS("storage")
-            nvs.set_blob(str(key), str(tz_dst).encode())
-            nvs.commit()
-        except Exception as e:
-            if config.DEBUG:
-                print(f"[ERROR]   Issue on saving to esp32.NVS: {e}")
-            raise
+            print(f"[ERROR]    NVS Save {key}: {e}")
+            return False
     
     
     
@@ -320,7 +322,13 @@ class SelfLearningClock:
                 print(f"[DEBUG]    MCU awake for {ticks_diff(ticks_ms(), self.t_out_sleep)} ms")
                 
                 # MCU lighsleep time to wake up jsut in time for the minute change
-                print(f"[DEBUG]    Entering lightsleep for {total_sleep_ms} ms")   
+                print(f"[DEBUG]    Entering lightsleep for {total_sleep_ms} ms")
+                
+                # force the buffer to get empyied
+                sys.stdout.flush()
+
+                # short sleep to allow the data trasmission (UART/USB); from 10ms to 50ms should do
+                sleep_ms(10)
             
             # call the light sleep function, passing the sleeping time in mS
             lightsleep(total_sleep_ms)
@@ -362,80 +370,127 @@ class SelfLearningClock:
         self.display.text_on_logo(f"OSC  VERSION:  {__version__}", x=-1, y=-1, show_time_ms=5000)
         
         # check the aging factor at the DS3231SN and at ESP32 NVS
-        self.aging = await self._check_aging_factor()   
+        self.aging = await self._check_aging_factor()
         
-        # plot the OSC logo with a custom text underneath
-        self.display.text_on_logo("WIFI  CONNECTION  ...", x=-1, y=-1, show_time_ms=2_000)
+        # set use_wifi variable as True
+        use_wifi = True
         
-        # force garbage collection
-        gc.collect()
-        
-        # refresh the wdt
-        self.network_mgr.feed_wdt(label="before making 1st wlan")
-        
-        # initialize WiFi
-        self.network_mgr.connect_to_wifi(blocking=True)
-        
-        # check if error due to wifi connection
-        if not self.network_mgr.wifi_bool:
-            self.display.text_on_logo("ERROR: WIFI NETWORKS", x=-1, y=-1, show_time_ms=2_000)
-            sys.exit(1)
-        
-        # check if the wifi has internet connection
-        ret = await self.network_mgr.is_internet_available(blocking=True)
-        
-        # check if error due to internet access
-        if not ret:
-            self.display.text_on_logo("ERROR: NO INTERNET", x=-1, y=-1, show_time_ms=2_000)
-            sys.exit(1)
-        
-        # refresh the wdt
-        self.network_mgr.feed_wdt(label="after making 1st wlan")
-        
-        # check the IP addresses of the NTP server(s)
-        ntp_servers_ip = await self.network_mgr.get_ntp_servers_ip(repeats=5)
-        
-        # check if error ar resolving the NTP servers addresses
-        if len(ntp_servers_ip) == 0:
-            self.display.text_on_logo("ERROR: NTP DNS", x=-1, y=-1, show_time_ms=0)
-            sys.exit(1)
-        
+        # case battery is set True
+        if config.BATTERY:
+            # check the last battery_low flag saved at the esp32.nvs
+            battery_low_nvs = self._get_nvs_val(key="battery_low")
+            
+            # list of messages suggesting a reboot after a power outage
+            reboot_msg_low_energy = ("POWER-ON RESET", "BROWNOUT RESET", "HARD RESET", "SOFT RESET")
+            
+            # case the battery was low and the ESP32 reset is compatible with a power outage
+            if battery_low_nvs and reset_msg in reboot_msg_low_energy:
+                
+                # plot the OSC logo with the power otage info
+                self.display.text_on_logo(f"BATTERY DIED, REBOOT", x=-1, y=-1, show_time_ms=5000)
+                if config.DEBUG:
+                    print()
+                    print("%" *40)
+                    print("%" *40)
+                    print("Rebooting after a suspected power outage, no NTP check")
+                    print("%" *40)
+                    print("%" *40, "\n")
+                
+                last_ntp_s_nvs = self._get_nvs_val(key="last_ntp", default=None)
+                if last_ntp_s_nvs is not None: 
+                    self.ntp_datetime_str = self.time_mgr.get_dt_from_epoch(last_ntp_s_nvs)
+                else:
+                    # 2026-03-14, day of this code addition, is used as "last NTP sync" date
+                    self.ntp_datetime_str = self.time_mgr.get_dt_from_epoch(826824718)
+                    
+                # set use_wifi variable to False, to skip wifi checking
+                use_wifi = False
+            
+            # initially set the self.battery_low variable to None, later it gets updated based on the real battery voltage
+            self.battery_low = None
+            
+            # check the battery voltage and set the battery level
+            self._check_battery()
+            
+            # saves the time reference
+            last_battery_check_ms = ticks_ms()
+            
+
         # get the first tick, in ms (time from the board powering moment)
         tick = ticks_ms()
         
-        # assign the tick to a instance variable
-        self.last_display_update_ticks = tick
+        # case use_wifi is set True
+        if use_wifi:
+            # plot the OSC logo with a custom text underneath
+            self.display.text_on_logo("WIFI  CONNECTION  ...", x=-1, y=-1, show_time_ms=2_000)
+        
+            # force garbage collection
+            gc.collect()
+            
+            # refresh the wdt
+            self.network_mgr.feed_wdt(label="before making 1st wlan")
+            
+            # initialize WiFi
+            self.network_mgr.connect_to_wifi(blocking=True)
+            
+            # check if error due to wifi connection
+            if not self.network_mgr.wifi_bool:
+                self.display.text_on_logo("ERROR: WIFI NETWORKS", x=-1, y=-1, show_time_ms=2_000)
+                sys.exit(1)
+        
+            # check if the wifi has internet connection
+            ret = await self.network_mgr.is_internet_available(blocking=True)
+            
+            # check if error due to internet access
+            if not ret:
+                self.display.text_on_logo("ERROR: NO INTERNET", x=-1, y=-1, show_time_ms=2_000)
+                sys.exit(1)
+        
+            # refresh the wdt
+            self.network_mgr.feed_wdt(label="after making 1st wlan")
+        
+            # check the IP addresses of the NTP server(s)
+            ntp_servers_ip = await self.network_mgr.get_ntp_servers_ip(repeats=5)
+        
+            # check if error ar resolving the NTP servers addresses
+            if len(ntp_servers_ip) == 0:
+                self.display.text_on_logo("ERROR: NTP DNS", x=-1, y=-1, show_time_ms=0)
+                sys.exit(1)
+        
+            # get the first tick, in ms (time from the board powering moment)
+            tick = ticks_ms()
+            
+            # assign the tick to a instance variable
+            self.last_display_update_ticks = tick
 
-        # organize for the first NTP sync
-        print("\n[INFO]     Performing first NTP sync ...")
+            # organize for the first NTP sync
+            print("\n[INFO]     Performing first NTP sync ...")
 
-        # plot the OSC logo with a custom text underneath
-        self.display.text_on_logo("NTP  SYNCING ...", x=-1, y=-1, show_time_ms=500)
-        
-        # make the first NTP syncing, being also blocking
-        ntp_epoch_s, epoch_fract_ms, sync_ticks_ms = await self.network_mgr.get_ntp_time(ntp_servers_ip, blocking=True)
+            # plot the OSC logo with a custom text underneath
+            self.display.text_on_logo("NTP  SYNCING ...", x=-1, y=-1, show_time_ms=500)
+            
+            # make the first NTP syncing, being also blocking
+            ntp_epoch_s, epoch_fract_ms, sync_ticks_ms = await self.network_mgr.get_ntp_time(ntp_servers_ip, blocking=True)
 
-        # case the real first NTP sync fails
-        if ntp_epoch_s is None:
-            # code is stopped
-            raise Exception('First NTP synchronization failed. Halting.')
-        
-        # set the ntp_epoch_s to the ds3231 rtc module
-        await self._set_DS3231_rtc(ntp_epoch_s, epoch_fract_ms, sync_ticks_ms)
-        
-        # assign ntp_epoch_s to self.last_ntp_epoch_s for later calibration purpose
-        self.last_ntp_epoch_s = ntp_epoch_s
-        
-        # convert ntp_epoch_s in a string of date and time
-        self.ntp_datetime_str = self.time_mgr.get_dt_from_epoch(ntp_epoch_s)
+            # case the real first NTP sync fails
+            if ntp_epoch_s is None:
+                # code is stopped
+                raise Exception('First NTP synchronization failed. Halting.')
+            
+            # set the ntp_epoch_s to the ds3231 rtc module
+            ret = await self._set_DS3231_rtc(ntp_epoch_s, epoch_fract_ms, sync_ticks_ms)
+            
+            # assign ntp_epoch_s to self.last_ntp_epoch_s for later calibration purpose
+            self.last_ntp_epoch_s = ntp_epoch_s
+            
+            # saves the ntp_epoch_s to the esp32.nvs memory (for power outage cases) 
+            self._set_nvs_val(key="last_ntp", value=ntp_epoch_s)
+            
+            # convert ntp_epoch_s in a string of date and time
+            self.ntp_datetime_str = self.time_mgr.get_dt_from_epoch(ntp_epoch_s)
 
         # get temperature from the DS3231 module
         self.ds3231_temp = await self._get_DS3231_temperature()
-
-        # case battery is set True
-        if config.BATTERY:
-            # check the battery voltage
-            self.batt_voltage, self.batt_level = self.battery.check_battery()
 
         # conditional main loop variables
         if config.DEBUG:
@@ -496,6 +551,14 @@ class SelfLearningClock:
                         break
             
             
+            # case of battery presence with increasing voltage (charging)
+            if config.BATTERY and self.battery_chrg:
+                # case of at least 6 minutes since previous check
+                if ticks_diff(current_ticks_ms, last_battery_check_ms) > 360_000:
+                    self._check_battery()
+                    last_battery_check_ms = current_ticks_ms
+            
+            
             # half-hour checks
             if ticks_diff(current_ticks_ms, last_halfour_check_ms) > 1_800_000:
                 
@@ -508,7 +571,12 @@ class SelfLearningClock:
                 # call the supporting function to get the time from DS3231
                 self.ds3231_temp = await self._get_DS3231_temperature()
                 
-               
+                # case the battery is set True and at least 6 minutes from previous check
+                if config.BATTERY and ticks_diff(current_ticks_ms, last_battery_check_ms) > 360_000:
+                    self._check_battery()
+                    last_battery_check_ms = current_ticks_ms
+    
+                
                 # hourly checks
                 if ticks_diff(current_ticks_ms, last_hourly_check_ms) > 3_600_000:
                     
@@ -520,16 +588,6 @@ class SelfLearningClock:
                     
                     # refresh the wdt
                     self.network_mgr.feed_wdt(label="Hourly checks")
-                    
-                    # case the battery is set True
-                    if config.BATTERY:
-                        # measure the battery voltage and related level 
-                        batt_voltage, batt_level = self.battery.check_battery()
-                        
-                        # case the current battery values differ from the previous ones
-                        if batt_voltage != self.batt_voltage or batt_level != self.batt_level:
-                            self.batt_voltage = batt_voltage
-                            self.batt_level = batt_level
                     
                     # check if calibration can be enabled
                     if self.hourly_counter >= config.MIN_TIME_AUTO_CAL_H:
@@ -543,7 +601,7 @@ class SelfLearningClock:
                         
                     
             
-            # case it is time for display refresh
+            # case it is time for display update
             if self.forced_cycle or ticks_diff(current_ticks_ms, self.last_display_update_ticks) >= self.display_interval_ms:
                 
                 self.last_display_update_ticks = current_ticks_ms
@@ -663,7 +721,10 @@ class SelfLearningClock:
         
         if config.DEBUG:
             print()
-            
+        
+        if config.QUICK_CHECK:
+            new_aging = 0
+        
         # aging is initially set to None
         aging = None
         
@@ -677,7 +738,7 @@ class SelfLearningClock:
         ret = False
         
         # get the TZ and DST correction to NVS
-        utc_tz_dst = self.get_tz_dst_nvs(text = "CALIB")
+        utc_tz_dst = self._get_nvs_val(key="tz_dst", default=None, text="CALIB")
         
         # check NTP sync result
         if ntp_epoch_s is not None and time_tuple is not None and utc_tz_dst is not None:
@@ -796,7 +857,7 @@ class SelfLearningClock:
                     # case the choice is to reset and aging factor at the DS3231 is zero
                     if reset_aging and aging_ds3231 == 0:
                         
-                        # the reset  aging value at the DS3131 is assigned to the variable aging
+                        # the resetted aging value at the DS3131 is assigned to the variable aging
                         aging = 0
                         
                         if config.DEBUG:
@@ -824,26 +885,29 @@ class SelfLearningClock:
                         # set the done variable to False to interrupt the for loops
                         done = True # for loop is interrupted
                 
+                # saves the ntp_epoch_s to the esp32.nvs memory (for power outage cases) 
+                self._set_nvs_val(key="last_ntp", value=ntp_epoch_s)
+                
                 # reset the enable calibration flag
                 self.enable_cal = False
                 
-                # case the variabe done isi set True
+                # case the variabe done si set True
                 if done:
                     break  # for loop is interrupted
 
         # load aging factor from NVS
-        aging_factor_nvs = self.get_aging_nvs()
+        aging_factor_nvs = self._get_nvs_val(key="aging", default=0)
         
         # case the aging factor at the NVS differs from the one at DS3231SN
-        if aging_factor_nvs != aging:
-            
+        if aging_factor_nvs != aging and aging is not None:
+
             # write the DS3231 aging factor to the ESP32 NVS
-            ret = self.save_aging_nvs(int(aging), key=1)
+            ret = self._set_nvs_val(key="aging", value=aging)
             
-            # case writeing went well
+            # case writing went well
             if ret and config.DEBUG and aging_ds3231 != self.aging:
                 # check the aging factor at ESP32 NVS
-                if self.get_aging_nvs():
+                if self._get_nvs_val(key="aging", default=0):
                     print(f"[CALIB]    New aging factor {aging} has been correctly written to the ESP32 NVS")
             
         if config.DEBUG:
@@ -889,14 +953,6 @@ class SelfLearningClock:
             # forced garbage collection
             gc.collect()
             
-            # set the battery_low flag as False
-            battery_low = False
-            
-            # if battery presence and its voltage below threshold
-            if config.BATTERY and self.batt_voltage < config.BATTERY_WARNING:
-                # set the battery_low flag as True
-                battery_low = True
-            
             # determines how to refresh the display (full or partial update)
             if self.time_tuple[4] == 0:  # case minutes = 0 (round hour)
                 epd_clear = True         # display full refresh (prevent ghosting)
@@ -904,10 +960,10 @@ class SelfLearningClock:
                 epd_clear = False        # display partial update (saves energy)
             
             # send the updated info to the display Class
-            self.display.show_data(H1, H2, M1, M2, dd, day, d_string, self.ntp_datetime_str,
-                                   self.ds3231_temp, self.batt_level, self.network_mgr.wifi_bool,
-                                   self.network_mgr.ntp_bool, self.aging, self.enable_cal,
-                                   battery_low=battery_low, plot_all=epd_clear)
+            self.display.show_data(H1, H2, M1, M2, dd, day, d_string, self.ntp_datetime_str, self.ds3231_temp,
+                                   self.batt_level, self.batt_voltage, self.battery_chrg,
+                                   self.network_mgr.wifi_bool, self.network_mgr.ntp_bool, self.aging, self.enable_cal, 
+                                   battery_low=self.battery_low, plot_all=epd_clear)
             
             # refresh the wdt
             self.network_mgr.feed_wdt(label="update_display_2")
@@ -1011,21 +1067,21 @@ class SelfLearningClock:
         
         # sets the time to the ds3231 module
         ret = await self.time_mgr.update_rtc(ntp_epoch_s + delay_s)
-        
+
         # check the time has been correctly saved to the DS3231SN RTC
-        time_tuple = await self._get_DS3231_time()
+        epoch_s = await self._get_DS3231_time()
         
         # retrieve the TZ and DST correction applied when saving the epoch_s to DS3231 RTC
         utc_tz_dst = self.time_mgr.get_UTC_TZ(ntp_epoch_s)   # utc_tz_dst units is hours
-        
 
-        # Note: When writing the RTC, the TZ and DST is saved to the NVS; Tthis allows to correctly calculate the period in between
-        # latest NTP syncs, also in case a DST adjustment has happened in the meanwhile.
-        # The TZ and DST correction is then used to calculate the UTC epoch_s from DS3231 RTC and the seconds elapsed (at DS3231 rtc)
-        # since the last time the RTC got written
+        # Note: When writing the RTC (UTC), the TZ and DST is saved to the NVS;
+        # This allows to correctly calculate the period in between latest NTP syncs, also
+        # in case a DST adjustment has happened in the meanwhile.
+        # The TZ and DST correction is then used to calculate the UTC epoch_s from DS3231 RTC
+        # and the seconds elapsed (at DS3231 rtc) since the last time the RTC got written.
 
         # save the TZ and DST correction to NVS
-        self.save_tz_dst_nvs(utc_tz_dst)
+        self._set_nvs_val(key="tz_dst", value=utc_tz_dst)
 
         # check the DS3231 return
         if ret:
@@ -1038,7 +1094,7 @@ class SelfLearningClock:
                 ret = await self.time_mgr.update_rtc(ntp_epoch_s + delay_s, pwr_up_time_ms = (i+1)*10)
                 if ret:
                     if config.DEBUG:
-                        print("[DEBUG]    Set RTC to DS3231 module at attempt {i+2] out 5")
+                        print("[DEBUG]    Set UTC time (no TZ, no DST) to DS3231 module at attempt {i+2] out 5")
                     return ret
                 
                 if not ret:
@@ -1054,7 +1110,6 @@ class SelfLearningClock:
             t_ref_ms = ticks_ms()
         
         ret = None
-        
         # retrieves the time from the ds3231 module
         ret = await self.time_mgr.get_DS3231_time()
         
@@ -1128,16 +1183,14 @@ class SelfLearningClock:
             print(f"[DEBUG]    Aging factor at DS3231SN flash memory: {aging_factor_ds3231sn}")
         
         # load aging factor from NVS
-        aging_factor_nvs = self.get_aging_nvs()
-        if config.DEBUG:
-            if aging_factor_nvs is not None:
-                print(f"[DEBUG]    Aging factor at NVS memory: {aging_factor_nvs}")
-            else:
-                print("[DEBUG]    Aging factor at NVS memory is None")
+        aging_factor_nvs = self._get_nvs_val(key="aging", default=0)
         
-        # case the esp32.nsv is still None while the DS3231 aging is 0 or different value
+        if config.DEBUG and aging_factor_nvs is None:
+            print("[DEBUG]    Aging factor at NVS memory is None")
+        
+        # case the esp32.nvs is still None while the DS3231 aging is 0 or different value
         if aging_factor_nvs is None and aging_factor_ds3231sn is not None:
-            ret = self.save_aging_nvs(int(aging_factor_ds3231sn), key=1)
+            ret = self._set_nvs_val(key="aging", value=int(aging_factor_ds3231sn))
         
         # case aging_factor_ds3231sn is zero and aging_factor_nvs differs from zero
         if aging_factor_nvs is not None and aging_factor_ds3231sn is not None:
@@ -1154,7 +1207,7 @@ class SelfLearningClock:
         # this is the case when the aging_factor_ds3231sn is manually written in development phase
         # this IF case must remain at the end of the other IF cases
         if aging_factor_ds3231sn is not None and (aging_factor_nvs is None or aging_factor_nvs==0):
-            ret = self.save_aging_nvs(aging_factor_ds3231sn)
+            ret = self._set_nvs_val(key="aging", value=aging_factor_ds3231sn)
             if config.DEBUG:
                 if ret:
                     print(f"[DEBUG]    Aging factor {aging_factor_ds3231sn} at DS3231SN flash memory is now written to ESP32 NVS") 
@@ -1162,7 +1215,7 @@ class SelfLearningClock:
                     print(f"[DEBUG]    Error in writing the aging factor {aging_factor_ds3231sn} to ESP32 NVS")
         
         # load aging factor from NVS, eventually updated
-        aging_factor_nvs = self.get_aging_nvs()
+        aging_factor_nvs = self._get_nvs_val(key="aging", default=0)
         
         if config.DEBUG:
             print()
@@ -1182,6 +1235,42 @@ class SelfLearningClock:
         except ValueError as e:
             print(f"[ERROR]   The value {num_text} is not a number: {e}")
             return None
+    
+    
+    
+    
+    def _check_battery(self):         
+        """
+        Check the battery voltage and its charge level.
+        If the battery voltage is increasing a more frequent control is set.
+        """
+        
+        # battery voltage and battery level are measured
+        batt_voltage, batt_level = self.battery.check_battery()
+        
+        # case the battery voltage is below warning threshold
+        if batt_voltage < config.BATTERY_WARNING:
+            # case the battery was above threshold at previous measure (or unknown status)
+            if self.battery_low is None or self.battery_low == False:
+                # the low battery flaw is set to the esp32.nvs
+                self._set_nvs_val(key="battery_low", value=1)
+        
+        # case the battery voltage is above warning threshold
+        else:
+            # case the battery was below threshold at previous measure (or unknown status)
+            if self.battery_low is None or self.battery_low == True:
+                # the low battery flag is reset to the esp32.nvs
+                self._set_nvs_val(key="battery_low", value=0)
+        
+        
+        # check the battery voltage
+        if batt_voltage != self.batt_voltage or batt_level != self.batt_level:
+            self.batt_voltage = batt_voltage
+            self.batt_level = batt_level
+        
+        # battery_chrg is set True if the battery voltage is increasing (charging)
+        # when battery_chrg is True, the battery check is more frequent (6 mins) instead a lees frequent (60 mins)
+        self.battery_chrg = True if self.battery.batt_voltage_increasing else False
     
     
     

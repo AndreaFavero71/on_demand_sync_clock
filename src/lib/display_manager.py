@@ -318,8 +318,9 @@ class Display():
 
 
 
-    def show_data(self, H1, H2, M1, M2, dd, day, d_string, ntp_datetime_str, ds3231_temp, batt_level,
-                  wifi_bool, ntp_bool, aging, cal_bool, am=False, battery_low=False, plot_all=True):
+    def show_data(self, H1, H2, M1, M2, dd, day, d_string, ntp_datetime_str, ds3231_temp, batt_level, 
+                  batt_voltage, battery_charging, wifi_bool, ntp_bool, aging, cal_bool,
+                  am=False, battery_low=False, plot_all=True):
         """
         Plots the data to the framebuffer and shows it on the display.
         The function also manages partial update for the fields/digits that changes since
@@ -334,6 +335,17 @@ class Display():
             self.epd_wakeup()
         
         update_epd = False
+
+        
+        # temporary plot to debug the more frequent battery check when charging the battery
+#         if battery_charging:
+#             Writer.set_textpos(self.epd, self.batt_y + 38, self.batt_x)  # y, x order
+#             self.wri_17.printstring("CHARGING       ", invert=True)      # battery charging
+#         else:
+#             Writer.set_textpos(self.epd, self.batt_y + 38, self.batt_x)  # y, x order
+#             self.wri_17.printstring("DISCHARGING", invert=True)          # battery discharging
+        # temporary plot to debug the more frequent battery chaeck when charging the battery
+    
         
         if self.battery and batt_level != self.last_batt_level:
             self.epd.blit(BatteryIcons.battery_icon[batt_level], self.batt_x, self.batt_y) # plots the OSC logo with custom text
@@ -441,6 +453,9 @@ if __name__ == "__main__":
     from utime import localtime
     from random import randint
     
+    VOLTAGE_LEVELS = (4.02, 3.95, 3.84, 3.725, 3.675, 3.64, 3.59)
+    PERCENT_LEVELS = (100, 80, 60, 40, 20, 10, 0)
+    
     print("\nDisplay test, with random values\n")
     
     print("battery     :", config.BATTERY)
@@ -525,6 +540,9 @@ if __name__ == "__main__":
     # initialize the time_manager
     time_mgr = TimeManager(config)
     
+    last_batt_voltage = 4.2
+    last_battery_low = False
+    
     print("\n"*2)
     run = -1
     
@@ -550,14 +568,20 @@ if __name__ == "__main__":
         wifi_bool     = (True, False)[randint(0,1)]
         cal_bool      = (True, False)[randint(0,1)]
         aging         = randint(-127, 127)
-        batt_level    = (0, 10, 20, 40, 60, 80, 100)[randint(0,6)]
+        batt_voltage  = randint(380, 400)/100 if run < 1 else randint(300, 420)/100
+        
+        # find the closest battery level
+        closest_index = min(range(len(VOLTAGE_LEVELS)), key=lambda i: abs(batt_voltage - VOLTAGE_LEVELS[i]))
+        batt_level = PERCENT_LEVELS[closest_index]
+        
+        # determine if the battery is charging
+        battery_chrg = True if batt_voltage > last_batt_voltage else False
         
         # The transition from True to False of battery_low forces a full refresh of the display
-        # For this reason its occurrence gets limited
-        battery_low   = True if run % 10 == 0 else False    
+        battery_low = True if batt_voltage < config.BATTERY_WARNING else False    
 
-        # define whether the EPD shoyld partial update or full refresh
-        if run < 0 or run >= 3: #60:
+        # define whether the EPD should do partial update or full refresh
+        if run < 0 or run >= 60 or (not last_battery_low and last_battery_low):
             run = 0
             plot_all = True
         else:
@@ -571,8 +595,11 @@ if __name__ == "__main__":
             print(f"Date: {d_string} \t Time: {H1}{H2}:{M1}{M2} \t Last NTP sync: {ntp_datetime_str}")
         
         # call the display 
-        display.show_data(H1, H2, M1, M2, dd, day, d_string, ntp_datetime_str, temp, batt_level,
-                          wifi_bool, ntp_bool, aging, cal_bool, am, battery_low=battery_low, plot_all=plot_all)
-            
+        display.show_data(H1, H2, M1, M2, dd, day, d_string, ntp_datetime_str, temp,
+                          batt_level, batt_voltage, battery_chrg,
+                          wifi_bool, ntp_bool, aging, cal_bool, am,
+                          battery_low=battery_low, plot_all=plot_all)
+        
+        last_batt_voltage = batt_voltage
         run += 1
         sleep_ms(5000)

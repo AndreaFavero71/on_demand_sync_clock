@@ -1,5 +1,6 @@
 #! /usr/bin/env micropython
 
+# Andrea Favero, for the OSC project
 # Micropython driver for the DS3231 RTC Module
 
 
@@ -9,6 +10,7 @@
 # - Modified the workday for direct compatibility with MicroPython (DS3231 1-7, MP 0-6)
 # - Moved the temperature reading to the 'original' driver.
 # - Added the methods to read and write the aging factor.
+# - The return is epoch instead of time tuple (easier to later handle TZ and DST)
 
 
 # Based on:
@@ -43,7 +45,7 @@
 # THE SOFTWARE.
 
 from micropython import const
-
+from utime import mktime, gmtime
 
 DS3231_I2C_ADDRESS = 0x68
 
@@ -193,6 +195,8 @@ class DS3231:
         - Seconds and weekday are optional on set; missing fields default to 0.
         - Always uses 24-hour format on return.
         - Weekday are increased by one (only writing): DS3231 1-7, Micropython 0-6
+        
+        Return is in epoch (seconds, from date reference used by MicroPython)
         """
         if datetime is None:
             # ----------------------------
@@ -234,8 +238,15 @@ class DS3231:
             if self.OSF():
                 print("WARNING: Oscillator stop flag set. Time may not be accurate.")
 
-            # Return full tuple plus dummy yearday (0) to match ESP32 RTC MicroPython API
-            return (year, month, day, hour, minutes, seconds, weekday, 0)
+            # tuple plus dummy yearday (0) to match ESP32 RTC MicroPython API
+            dt = (year, month, day, hour, minutes, seconds, weekday, 0)
+            
+            # convert the time tuple to epoch
+            epoch_utc = mktime(dt)
+            
+            # return the epoch
+            return epoch_utc
+
 
         # A new datetime tuple was provided by the user to set the RTC.
         # Let's perform some basic validation:

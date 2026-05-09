@@ -1000,7 +1000,7 @@ class NetworkManager:
                             # from epoch (secs) to UTC (time.struct_time obj)
                             time_tuple = gmtime(epoch_s)        
                             
-                            # set the rtc with the just obtained UTC time 
+                            # set the ESP32 rtc with the just obtained UTC time 
                             # note: the time zone will only applied to the displayed time
                             self.rtc.datetime((time_tuple[0], time_tuple[1], time_tuple[2],
                                                time_tuple[6], time_tuple[3], time_tuple[4],

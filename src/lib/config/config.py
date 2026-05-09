@@ -11,7 +11,7 @@ More info at:
 # System controls #########################################################################
 
 # features
-QUICK_CHECK    = True#False               # set True only for code debugging
+QUICK_CHECK    = True #False               # set True only for code debugging
 OPEN_NETWORKS  = True                # set True if open wify are an option
 BATTERY        = True                # set True if battery operated
 WDT_ENABLED    = True                # set True always (allows reboot is any code freezing)
@@ -65,14 +65,14 @@ MAX_NTP_OFFSET_MS     =       1000   # max time offset from NTP to reset interna
 
 
 # Temperature shift
-TEMPERATURE_SHIFT = 1.2              # value added to the temperature retrieved from DS3231
+TEMPERATURE_SHIFT = 0                # value added to the temperature retrieved from DS3231
 
 
 # Minimum period (in hours) to enable auto-calibration (aging factor) of the DS3231 chip
 # This is the time from the boot, or since the last NTP sync. A longer period reduces
 # the error due to low resolution (1 sec) of this clock.
 # Note 1 sec error in in 14 days means 0.83ppm (26 secs error / year)
-MIN_TIME_AUTO_CAL_H = 14 * 24        # 14 days
+MIN_TIME_AUTO_CAL_H = 14 * 24        # 14 days, expressed in hours
 
 
 # case the clock is battery operated, a a low voltage warning is applicable

@@ -37,8 +37,8 @@ DIVIDER_RATIO = 2                   # voltage divider ratio:  (R2 + R41) / R41 =
 VBAT_READINGS = 20                  # number of readings for averaging
 
 # constants for the ADC calibration
-CORRECTION = 1.0     #(default 1.0) # correction of adc reading slope vs measured (multimeter)
-SHIFT = 0.0          #(default 0.0) # correction of adc reading shift vs measured (multimeter)         
+CORRECTION = 1.000   #(default 1.0) # correction of adc reading slope vs measured (multimeter)
+SHIFT = 0.000        #(default 0.0) # correction of adc reading shift vs measured (multimeter)         
 
 # tuples with the volatge thresholds and battery levels
 VOLTAGE_LEVELS = (4.02, 3.95, 3.84, 3.725, 3.675, 3.64, 3.59)
@@ -64,9 +64,13 @@ class Battery():
         self.voltage_levels = VOLTAGE_LEVELS
         self.percent_levels = PERCENT_LEVELS
         
+        self.last_batt_voltage = 0
+        self.batt_voltage_increasing = False
+        
         self.last_level = None
         self.batt_voltage_list = []
         self.batt_voltage, self.batt_level = self.check_battery()
+        
         
 
     def read_batt_voltage(self, adc_avg=0, bat_voltage=0):
@@ -91,7 +95,7 @@ class Battery():
 
 
 
-    def get_batt_percentage(self, voltage, last_level=None):
+    def _get_batt_percentage(self, voltage, last_level=None):
         """
         Simple closest+shift hysteresis:
           - pick closest nominal level (initial estimate)
@@ -160,25 +164,49 @@ class Battery():
 
 
     def check_battery(self):
-
+        """Hub function for battery voltage and battery level"""
+        
+        if self.debug:
+            print(f"\n[DEBUG]    Previous battery voltage = {self.last_batt_voltage:.3f}V")
+        
+        # get the battery voltage from the supporting function (average of n readings)
         batt_voltage = round(self.read_batt_voltage(),3) # battery voltage is measured   
+        
+        # append the battery voltage to the list
         self.batt_voltage_list.append(batt_voltage)
         
+        # case there are more than one value in the list
         if len(self.batt_voltage_list) > 1:
+            # average battery voltage is calculated
             batt_voltage = sum(self.batt_voltage_list) / len(self.batt_voltage_list)
         
+        # compare the (heavily averaged) battery voltage to previous value
+        self.batt_voltage_increasing = True if batt_voltage > self.last_batt_voltage else False
+        
+        # the (heavily averaged) battery voltage is assigned to the instance variable
         self.batt_voltage = batt_voltage
         
+        # assign the current (heavily averaged) battery voltage to last_batt_voltage
+        self.last_batt_voltage = self.batt_voltage
+        
+        # case there are more than 10 elements in the list
         if len(self.batt_voltage_list) > 10:
-            self.batt_voltage_list.pop(0)
-            
-        self.batt_level = self.get_batt_percentage(batt_voltage)
+            self.batt_voltage_list.pop(0)      # the older value gets removed
+        
+        # call the support function to get the battery level, based on the average battery voltage
+        self.batt_level = self._get_batt_percentage(batt_voltage)
+        
+        # the battery level is assigned to the last_batt_level
         self.last_batt_level = self.batt_level
         
         if self.debug:
-            print(f"[DEBUG]    Battery voltage = {batt_voltage:.3f}V,  Battery level = {self.batt_level}\n")
+            print(f"[DEBUG]    Battery voltage = {batt_voltage:.3f}V,  Battery level = {self.batt_level}")
+            if self.batt_voltage_increasing:
+                print("[DEBUG]    Battery voltage is increasing\n")
+            else:
+                print("[DEBUG]    Battery voltage is decreasing\n")
         
+        # battery volatge and level are returned
         return self.batt_voltage ,self.batt_level
 
-    
     

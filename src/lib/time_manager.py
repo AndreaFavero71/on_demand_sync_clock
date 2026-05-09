@@ -40,8 +40,8 @@ import uasyncio as asyncio
 import ujson as json
 
 
-SDA_PIN = 2
-SCL_PIN = 1
+SDA_PIN = 2          # Pin 1 in the first prototypes (prior publishing)
+SCL_PIN = 1          # Pin 2 in the first prototypes (prior publishing)
 DS3231_PWR_PIN = 3
 
 
@@ -71,7 +71,7 @@ class TimeManager:
         if epoch_s is None:
             return False
         
-        time_tuple_utc = self.epoch_to_timetuple(epoch_s)
+        time_tuple_utc = self.epoch_to_timetuple(epoch_s, apply_tz_dst = False)
         if time_tuple_utc is None:
             return False
         
@@ -93,9 +93,14 @@ class TimeManager:
             sleep_ms(pwr_up_time_ms)
             
             # reads time_tuple from DS3231 flash memory
-            time_tuple = self.ds.datetime()
+            epoch_utc = self.ds.datetime()
+            
             self.ds3231_pwr.value(0)
-            return time_tuple
+            
+            # converts epoch to datetime by including TZ and DST corrections
+            time_tuple_tz_dst = self.epoch_to_timetuple(epoch_utc, apply_tz_dst = True)
+            
+            return time_tuple_tz_dst
         except:
             return None
     
@@ -151,10 +156,29 @@ class TimeManager:
     
     
     
-    def epoch_to_timetuple(self, epoch_s):
+    def time_tuple_to_epoch_s(self, dt):
+        try:
+            epoch = mktime(dt)
+            return epoch
+        except Exception:
+            return None  # fallback
+    
+    
+    
+    def epoch_to_timetuple(self, epoch_s, apply_tz_dst=False):
+        
+        if apply_tz_dst:
+            local_epoch_s = self.apply_tz_dst(epoch_s)
+            return gmtime(local_epoch_s)              # time tuple corrected for TZ and DST
+        else:
+            return gmtime(epoch_s)                    # time tuple
+    
+    
+    
+    def apply_tz_dst(self, epoch_s):
         utc_tz_dst = self.get_UTC_TZ(epoch_s)         # DST CALCULATION
         local_epoch_s = epoch_s + 3600 * utc_tz_dst   # local epoch in secs
-        return gmtime(local_epoch_s)                  # local time tuple
+        return local_epoch_s                          # return local epoch in secs
     
     
     
@@ -269,9 +293,10 @@ class TimeManager:
     
     
     def get_dt_from_epoch(self, epoch_s):
-        time_tuple_utc = self.epoch_to_timetuple(epoch_s)
-        dd, day, d_string = self.get_date(time_tuple_utc)
-        time = self.get_time(time_tuple_utc)
+        # local_time_tuple incudes TZ and DST
+        local_time_tuple = self.epoch_to_timetuple(epoch_s, apply_tz_dst=True)
+        dd, day, d_string = self.get_date(local_time_tuple)
+        time = self.get_time(local_time_tuple)
         return f"{d_string}  {time}"
     
     
